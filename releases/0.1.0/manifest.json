@@ -1,0 +1,10 @@
+{
+	"id": "google-drive",
+	"name": "Google Drive",
+	"version": "0.1.0",
+	"minAppVersion": "0.15.0",
+	"description": "Synchronize your vault to/from Google Drive",
+	"author": "Antonio Tejada",
+	"authorUrl": "https://github.com/antoniotejada/",
+	"isDesktopOnly": false
+}
