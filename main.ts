@@ -1,6 +1,6 @@
 /**
  * # Development notes
- * 
+ *
  * ## Introduction
  *
  * https://developers.google.com/identity/protocols/oauth2
@@ -123,7 +123,7 @@
  * https://developers.google.com/drive/api/quickstart/nodejs
  * https://developers.google.com/drive/api/quickstart/python
  *
- * ### drive.files 
+ * ### drive.files
  *
  * Requires sharing each file individually with or created by the app
  * Can list folders but will only return those shared with or created by the app
@@ -177,18 +177,19 @@
  * https://rclone.org/drive/ https://github.com/rclone/rclone
  */
 
-import { 
-    App, 
+import {
+    App,
     ButtonComponent,
     DropdownComponent,
-    Modal, 
+    Modal,
     moment,
     Notice,
-    Plugin, 
-    PluginSettingTab, 
+    Plugin,
+    PluginSettingTab,
     Setting,
     TFolder,
     TFile,
+	TAbstractFile,
 } from 'obsidian';
 
 // Debuglevels in increasing severity so messages >= indexOf(debugLevel) will be
@@ -205,7 +206,7 @@ function hookLogFunctions(debugLevelIndex: number, tag: string) {
     logInfo("hookLogFunctions", debugLevelIndex, tag);
 
     const logIgnore = function(message?: any, ...optionalParams: any[]) {};
-    logError = (debugLevelIndex <= debugLevels.indexOf("error")) ? 
+    logError = (debugLevelIndex <= debugLevels.indexOf("error")) ?
         console.error.bind(console, tag + "[ERROR]:") :
         logIgnore;
     logWarn = (debugLevelIndex <= debugLevels.indexOf("warn")) ?
@@ -284,6 +285,12 @@ type GoogleDriveFile = {
     createdTime: string;
 };
 
+type GoogleDriveFileList = {
+	incompleteSearch: boolean;
+
+	files: GoogleDriveFile[];
+}
+
 export default class GoogleDrive extends Plugin {
     settings: GoogleDriveSettings;
 
@@ -301,10 +308,12 @@ export default class GoogleDrive extends Plugin {
     syncIntervalSecs: number = 0;
     syncIntervalId: number | null = null;
 
+	deleteQueue: Array<TAbstractFile> = [];
+
     async onload() {
         logInfo("onload");
 
-        
+
         /* XXX Can't be used since google doesn't allow app urls in the oauth2
                config page?
 
@@ -312,13 +321,21 @@ export default class GoogleDrive extends Plugin {
         this.registerObsidianProtocolHandler('gdriveresponse', (data:
         ObsidianProtocolData) => { logInfo("handler returns", data);
         });*/
-        
+
         await this.loadSettings();
 
         this.addRibbonIcon('sync', 'Synchronize vault with Google Drive', (evt: MouseEvent) => {
             this.syncVault();
         });
-        
+
+		// Listen for delete operations so we can delete those files on
+		// Google Drive, as well.
+		this.app.vault.on('delete', (abstractFile: TAbstractFile) => {
+			this.deleteQueue.push(abstractFile);
+			logInfo("added to delete queue:");
+			logInfo(abstractFile);
+		});
+
         this.addCommand({
             id: 'open-login-modal',
             name: 'Open login modal',
@@ -387,10 +404,10 @@ export default class GoogleDrive extends Plugin {
 
         this.uploadChanges = ((settings.syncMode == 'both') || (settings.syncMode == 'upload'));
         this.downloadChanges = ((settings.syncMode == 'both') || (settings.syncMode == 'download'));
-        
+
         let syncIntervalSecs = parseInt(settings.syncIntervalSecs);
         syncIntervalSecs = isNaN(syncIntervalSecs) ? 0 : Math.max(0, syncIntervalSecs);
-        
+
         // XXX This does work on every edit update, add an ok/cancel button?
         if (this.syncIntervalSecs != syncIntervalSecs) {
             if (this.syncIntervalId != null) {
@@ -408,7 +425,7 @@ export default class GoogleDrive extends Plugin {
 
             if (this.syncIntervalSecs != 0) {
                 this.syncIntervalId = window.setInterval(() => {
-                    
+
                     logWarn('Periodic synchronization not implemented yet');
                     // XXX Missing implementing periodic synchronization, needs
                     //     to resolve what happens if it fails due to login,
@@ -420,7 +437,7 @@ export default class GoogleDrive extends Plugin {
 
                     // this.syncFolder(settings.folderId, this.app.vault.getRoot());
                 }, this.syncIntervalSecs * 1000);
-                logInfo("Setting syncInterval id", this.syncIntervalId, "secs", 
+                logInfo("Setting syncInterval id", this.syncIntervalId, "secs",
                     this.syncIntervalSecs);
 
                 this.registerInterval(this.syncIntervalId);
@@ -438,15 +455,18 @@ export default class GoogleDrive extends Plugin {
         this.parseSettings(this.settings);
     }
 
-    async fetchApi(endpoint: string, params:any = null, init: RequestInit|null = null): Promise<Response> {
+    async fetchApi(endpoint: string, method: string = 'GET', params:any = null, init: RequestInit|null = null): Promise<Response> {
 
         let loginRetries = 0;
         let resp;
 
         while (true) {
             // Fill with defaults
-            
-            init = Object.assign({method:"GET"}, init);
+
+            init = Object.assign({
+				method: method
+			}, init);
+
             init.headers = Object.assign(init.headers||{}, { 'Authorization': 'Bearer ' + this.settings.accessToken})
             const query = (params == null) ? "" : '?' + new URLSearchParams(params).toString();
             logInfo("fetchApi doing fetch", init, query);
@@ -456,9 +476,9 @@ export default class GoogleDrive extends Plugin {
             );
 
             // XXX Missing filtering out all non auth-related errors, see below
-            
+
             if ((!resp.ok) && (resp.status != 404)) {
-                // Return is normally an error object json with 
+                // Return is normally an error object json with
                 // - auth error: status=401, error.code = 401, error.status = UNAUTHENTICATED, error.errors[0].reason=authError
                 // - invalid query: status=400, error.code = 400, error.status = undefined, error.errors[0].reason=invalid, invalidPameter...
                 // - internal error: status=500, error.code = 500, error.reason = internalError (gets fixed by retrying)
@@ -492,7 +512,7 @@ export default class GoogleDrive extends Plugin {
                     // result is that there may be a double refresh of the
                     // access token which is a waste of access tokens since
                     // there's some limit and older access tokens start being
-                    // revoked after that limit. 
+                    // revoked after that limit.
                     //
                     // Use a promise so only one refresh call is made and other
                     // fetchApi calls around that time on that promise to be
@@ -535,9 +555,9 @@ export default class GoogleDrive extends Plugin {
                         // Make the first waiter to wake up to reset the promise
                         this.refreshPromise = null;
                     }
-                } 
-                
-                // If there's no refresh token or refresh failed, prompt 
+                }
+
+                // If there's no refresh token or refresh failed, prompt
                 if (!resp.ok) {
                     logInfo("fetchApi prompting for login");
                     // If there's already a login dialog box, share that promise
@@ -582,7 +602,7 @@ export default class GoogleDrive extends Plugin {
     }
 
     async fetchJson(endpoint: string, params: any = null, init: RequestInit|null=null) {
-        return this.fetchApi(endpoint, params, init).then(resp => {
+        return this.fetchApi(endpoint, "GET", params, init).then(resp => {
             return resp.json();
         });
     }
@@ -599,7 +619,7 @@ export default class GoogleDrive extends Plugin {
             resp.files.forEach((f: GoogleDriveFile) => {
                 files.push(f);
             });
-            
+
             if (resp.nextPageToken !== undefined) {
                 return this.fetchFiles(folderId, files, resp.nextPageToken);
             } else {
@@ -608,6 +628,15 @@ export default class GoogleDrive extends Plugin {
         });
     }
 
+	async deleteFile(fileId: string): Promise<void> {
+		logInfo("deleteFiles", fileId);
+
+		return this.fetchApi(`drive/v3/files/${fileId}`, "DELETE")
+			.then((response) => {
+				logInfo("Response received from delete: ", response);
+			});
+	}
+
     async fetchCreateFolder(parentId: string, folderName: string) {
         // POST https://www.googleapis.com/upload/drive/v3/files?uploadType=media
         // See https://developers.google.com/drive/api/guides/manage-uploads#simple
@@ -615,8 +644,8 @@ export default class GoogleDrive extends Plugin {
         logInfo("fetchCreateFolder", parentId, folderName);
         const metadata = { name : folderName, mimeType : 'application/vnd.google-apps.folder', parents : [parentId]};
         const init = {
-            method: "POST", 
-            headers: {'Content-Type': 'application/json'}, 
+            method: "POST",
+            headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(metadata)
         };
         return this.fetchJson('drive/v3/files', null, init);
@@ -634,7 +663,7 @@ export default class GoogleDrive extends Plugin {
             if (resp?.error?.code == 404) {
                 return "/";
             }
-            
+
             // Note parents is undefined for "Computers" folders but length
             // 0 for 'root', allow both
 
@@ -655,11 +684,26 @@ export default class GoogleDrive extends Plugin {
         // XXX Rationalize these checks all over the file
         if ((this.settings.accessToken != '') && (this.settings.folderId != '')) {
             const syncStartTime = Date.now();
+
+			// Delete any files remotely that are in the delete queue.
+			while (this.deleteQueue.length > 0) {
+				let nextAbstractFileToDelete = this.deleteQueue.pop();
+				// let abstractFilePaths = nextAbstractFileToDelete?.path.split("/");
+				// console.log("***** DEBUG_jwir3: abstract file path of deletion target: ", abstractFilePaths);
+				let searchResults: GoogleDriveFileList = await this.findFolderByRelativePath(nextAbstractFileToDelete?.path, this.settings.folderId);
+				// Retrieve the id from the first result, if it's found
+				if (searchResults.files.length > 0) {
+					let resultingFile = searchResults.files[0];
+					logInfo("***** DEBUG_jwir3: Found resulting file: ", resultingFile);
+					await this.deleteFile(resultingFile.id);
+				}
+				// console.log("***** DEBUG_jwir3: Resulting file: ", folderPath);
+			}
+
             this.syncFolder(this.settings.folderId, this.app.vault.getRoot()).then(async ()=> {
                 this.settings.syncStartTime = syncStartTime.toString();
                 await this.saveSettings();
             });
-
         }
     }
 
@@ -667,12 +711,12 @@ export default class GoogleDrive extends Plugin {
         // Note the TAbstractFile.path is the path to this vault folder relative
         // to the vault root, including the folder's name so there's no need to
         // concat path and name
-        
+
         // XXX Note when syncing the root this won't sync orphaned folders
         //     despite those being shown on the dropdown, do we care? (orphaned
         //     folders can still be synced individually by passing the orphan
         //     folderId)
-        
+
         logInfo("syncFolder", folderId, vaultFolder.path);
 
         // XXX Have a setting to hide these
@@ -681,7 +725,7 @@ export default class GoogleDrive extends Plugin {
         // List both, sort, create newer, delete unexistent, update newer
 
         // This returns all files in the vault, including those in subdirs
-        // - path contains the vault relative full path (no leading forward slash), 
+        // - path contains the vault relative full path (no leading forward slash),
         // - name contains only the name
         // - parent is a TFolder, and path is "/" for the root folder
         // - deleted is a deletion flag
@@ -699,7 +743,7 @@ export default class GoogleDrive extends Plugin {
         logInfo("driveFiles", driveFiles);
 
         // Copy from google drive to the vault, recursively if necessary
-        
+
         // XXX Use HTTP If-match or If-unmodified-since header, to prevent race
         //     conditions with two clients updating at the same time (not
         //     supported but they could have sync interval set). Looks google
@@ -712,7 +756,7 @@ export default class GoogleDrive extends Plugin {
         //     alt=media response doesn't have an etag field
         // XXX Use the changes api?
 
-        // XXX This fails for files deleted from google, needs to either 
+        // XXX This fails for files deleted from google, needs to either
         //     - check the google drive changes API
         //     - replicate google drive changes API by storing a sync journal
         //       with deleted files in the google drive, maybe per user or atomic
@@ -732,9 +776,9 @@ export default class GoogleDrive extends Plugin {
 
         // XXX Have an option to delete to trash on Google Drive, delete to
         //     trash on vault
-        
-        
-        // XXX Same thing for renamed files (a rename could be implemented as a 
+
+
+        // XXX Same thing for renamed files (a rename could be implemented as a
         //      deletion + creation?)
 
         // File is on both
@@ -786,20 +830,20 @@ export default class GoogleDrive extends Plugin {
                     // Both are files, get the newest
                     const gtime = Date.parse(dfile.modifiedTime);
                     const vtime = vfile.stat.mtime;
-                    const dcmp = gtime - vtime; 
+                    const dcmp = gtime - vtime;
                     // XXX This time comparison can fail showing one millisecond
                     //     of difference (vault one less than drive), not clear
                     //     if it's a problem when uploading to Google Drive
                     //     setting the time? Currently worked around by checking
-                    //     against +-1 instead of 0 
+                    //     against +-1 instead of 0
                     //
-                    //     One theory is that because the file update sends the 
-                    //     file data after the metadata, it's possible google is 
+                    //     One theory is that because the file update sends the
+                    //     file data after the metadata, it's possible google is
                     //     re-updating the metadata at that point?
-                    //     If so, this could be fixed by sending the metadata 
-                    //     after the file data? But the multipart file upload 
-                    //     fails with a server error if the metadata comes after 
-                    //     the file  data in the multipart transaction, so it 
+                    //     If so, this could be fixed by sending the metadata
+                    //     after the file data? But the multipart file upload
+                    //     fails with a server error if the metadata comes after
+                    //     the file  data in the multipart transaction, so it
                     //     will probably require an independent metadata update?
                     if (dcmp < -1) {
                         // Copy vault to google drive
@@ -811,27 +855,27 @@ export default class GoogleDrive extends Plugin {
                         update = true;
                     } else if (dcmp > 1) {
                         // Copy google drive to vault
-                        
+
                         // XXX There could be bad interactions here with edit
                         //     history files:
                         //
-                        //     - If a file is copied from google drive before 
+                        //     - If a file is copied from google drive before
                         //       its history file, the modification callback will
                         //       be triggered and create an entry for that edit,
                         //       which can either race with the google drive of
                         //       the history file, cause this loop to use stale
                         //       information
                         //
-                        //     - If an edit history file is copied before its file, 
-                        //       this is probably ok since when the file is copied, 
-                        //       there will be zero diffs and the history file not 
+                        //     - If an edit history file is copied before its file,
+                        //       this is probably ok since when the file is copied,
+                        //       there will be zero diffs and the history file not
                         //       updated.
                         //
                         //    One workaround is to blacklist history files from
                         //    syncrhonizing, which is not too bad since it will
                         //    still record the edit due to the synchronization
                         //    in the history
-                        
+
                         logInfo("Will copy from drive", dcmp, dfile.name, "to vault", vfile.name, gtime, new Date(gtime), ">", vtime, new Date(vtime));
                         cmp = 1;
                         update = true;
@@ -850,7 +894,7 @@ export default class GoogleDrive extends Plugin {
                 if (cmp != 1) {
                     id++;
                 }
-            } 
+            }
             if (cmp == -1) {
                 // Vault file/folder not in drive
                 fileNotice.setMessage(vaultFile?.name as string);
@@ -872,18 +916,18 @@ export default class GoogleDrive extends Plugin {
                         const vfile = vaultFile as TFile;
 
                         logInfo("Uploading to drive", vfile.name, "from vault", vfile.name);
-                        
+
                         // XXX There are two possible race conditions here:
                         //
-                        //     - The file contents are more recent than the 
-                        //       metadata, not an issue, the next sync will 
+                        //     - The file contents are more recent than the
+                        //       metadata, not an issue, the next sync will
                         //       update the metadata
                         //
                         //     - The file was deleted after fetching the metadata
                         //       verify that syncFolder fails and is resumable
                         //       next time
 
-                        // XXX Verify a partially successful syncFolders doesn't 
+                        // XXX Verify a partially successful syncFolders doesn't
                         //     cause corruption and is resumable next time
 
                         const buffer = await vault.readBinary(vfile);
@@ -892,10 +936,10 @@ export default class GoogleDrive extends Plugin {
                         // more specific one, even on unkown extensions (ie it's
                         // able to set gzip to .edtz files)
                         const mimeType = 'application/octet-stream';
-                        const metadata = { 
-                            name : vfile.name, 
-                            modifiedTime: new Date(vfile.stat.mtime).toISOString(), 
-                            createdTime: new Date(vfile.stat.ctime).toISOString(), 
+                        const metadata = {
+                            name : vfile.name,
+                            modifiedTime: new Date(vfile.stat.mtime).toISOString(),
+                            createdTime: new Date(vfile.stat.ctime).toISOString(),
                             mimeType : mimeType,
                             parents : [folderId],
                         };
@@ -903,11 +947,11 @@ export default class GoogleDrive extends Plugin {
                             // Note google drive will fail with 403 if
                             // createdTime is updated, it can only be set at
                             // creation time
-                            modifiedTime: new Date(vfile.stat.mtime).toISOString(), 
+                            modifiedTime: new Date(vfile.stat.mtime).toISOString(),
                         };
 
                         // XXX Needs resumable upload method for big >5MB sizes
-                        
+
                         const form = new FormData();
                         // Sending the metadata before the file is believed to
                         // cause a bug where the sometimes the drive file
@@ -915,13 +959,13 @@ export default class GoogleDrive extends Plugin {
                         // vault file, so send the metadata after the file. This
                         // also requires setting the filename parameter for the
                         // form 'file' part or the call will return error
-                        
+
                         // XXX Sending metadata after the file in the same
                         //     multipart transaction fails with 403 for PATCH,
                         //     even with the file field, can't be done with
                         //     multipart will need to be changed to two separate
                         //     api calls to prevent the random 1ms modifiedTime
-                        //     issue? 
+                        //     issue?
                         //     See https://rclone.org/drive/#modified-time
                         form.append('metadata', new Blob([JSON.stringify(update ? updateMetadata : metadata)], {type: 'application/json; charset=UTF-8'}));
                         form.append('file', new Blob([buffer], {type: mimeType}));
@@ -961,10 +1005,10 @@ export default class GoogleDrive extends Plugin {
                         // Non-root paths are not forward slash terminated, add it
                         vaultFilepath = vaultFolder.path + "/" + vaultFilepath;
                     }
-                    
+
                     if (driveIsFolder) {
                         // If folder, create and recurse
-                        
+
                         logInfo("Creating vault folder", vaultFilepath);
                         await vault.createFolder(vaultFilepath).catch((error) => null);
                         let vaultSubFolder = vault.getAbstractFileByPath(vaultFilepath);
@@ -982,9 +1026,9 @@ export default class GoogleDrive extends Plugin {
                         // If file, download to vault
                         logInfo("Downloading from drive", dfile.name, "to vault", dfile.name);
 
-                        // XXX This needs to 
+                        // XXX This needs to
 
-                        const resp = await this.fetchApi('drive/v3/files/' + dfile.id, { alt: 'media' });
+                        const resp = await this.fetchApi('drive/v3/files/' + dfile.id, "GET", { alt: 'media' });
                         const buffer = await resp.arrayBuffer();
                         try {
 
@@ -994,14 +1038,14 @@ export default class GoogleDrive extends Plugin {
                             //       modifiedTime, this could be fixed by using
                             //       an If-unmodified header is probably not an
                             //       issue, in the next sync the metadata will
-                            //       be updated and the contents re-downloaded 
+                            //       be updated and the contents re-downloaded
                             //
                             //     - the file could have been deleted, this will
                             //       probably result in syncFolders aborting?
-                            
+
                             // Note createbinary and modifyBinary seem work fine
                             // for both text and binary files, so use that
-                            // disregarding the type                            
+                            // disregarding the type
                             if (update) {
                                 await vault.modifyBinary(vaultFile as TFile, buffer, { mtime: Date.parse(dfile.modifiedTime), ctime: Date.parse(dfile.createdTime)} );
                             } else {
@@ -1026,6 +1070,24 @@ export default class GoogleDrive extends Plugin {
 
         notice.setMessage('Synchronized ' + vaultFolder.path);
     }
+
+	async findFolderByRelativePath(path: string|undefined, folderId: string): Promise<GoogleDriveFileList> {
+		if (path) {
+			const splitPath = path.split("/");
+			const queryParams = {
+				q: `name = '${splitPath[splitPath.length - 1]}'`
+			};
+
+			console.log("***** DEBUG_jwir3: file path: ", path);
+
+			return this.fetchJson('drive/v3/files', queryParams).then(resp => {
+				logInfo('***** DEBUG_jwir3: Saw response for findFolderByRelativePath: ', resp);
+				return resp;
+			});
+		}
+
+		return Promise.resolve({ files: [], incompleteSearch: true} as GoogleDriveFileList);
+	}
 }
 
 class TextInputModal extends Modal {
@@ -1034,20 +1096,20 @@ class TextInputModal extends Modal {
     onSubmit: (result: string) => void;
 
     result: string;
-    
+
     constructor(app: App, title: string, prompt: string, onSubmit: (result: string) => void) {
         super(app);
-        
+
         this.title = title;
         this.prompt = prompt;
         this.onSubmit = onSubmit;
     }
-    
+
     onOpen() {
         const { contentEl } = this;
-    
+
         this.titleEl.setText(this.title);
-    
+
         // XXX This should accept on enter
         new Setting(contentEl)
             .setName(this.prompt)
@@ -1055,7 +1117,7 @@ class TextInputModal extends Modal {
                 text.onChange((value) => {
                 this.result = value
                 }));
-    
+
         new Setting(contentEl)
             .addButton((btn) =>
                 btn
@@ -1072,7 +1134,7 @@ class TextInputModal extends Modal {
                     this.close();
                 }));
     }
-    
+
     onClose() {
         let { contentEl } = this;
         contentEl.empty();
@@ -1142,7 +1204,7 @@ class LoginModal extends Modal {
                 scope: this.plugin.settings.clientScope,
                 // Taken from oauth 2.0 playfround at https://developers.google.com/oauthplayground/
                 // See https://stackoverflow.com/questions/11475101/when-is-access-type-online-appropriate-oauth2-google-api
-                // Setting to offline is necessary so a refresh_token is 
+                // Setting to offline is necessary so a refresh_token is
                 // provided
                 access_type: 'offline',
                 // Set to "consent" to force a consent prompt to the user and
@@ -1168,7 +1230,7 @@ class LoginModal extends Modal {
         // XXX Investigate if there's a way of not having to reveal the secret
         //     but still have refresh tokens with desktop app flow?
         //     https://developers.google.com/identity/protocols/oauth2/native-app
-        
+
         return authParams;
     }
 
@@ -1186,14 +1248,14 @@ class LoginModal extends Modal {
             } else {
                 apiSetting.settingEl.hide();
             }
-        }   
+        }
     }
 
     onOpen() {
-        
+
         const {contentEl} = this;
         this.ok = false;
-        
+
         this.titleEl.setText("Google Drive login for vault ");
         this.titleEl.createEl("i", { text: this.plugin.app.vault.getName() });
 
@@ -1212,7 +1274,7 @@ class LoginModal extends Modal {
                     this.setGoogleCloudConfigurationVisible(apiConfigSettings, this.showGoogleCloudConfiguration);
             })
         );
-        
+
         // In order to login to google drive, a two step process is used:
         // - The user clicks on a link that contains the oauth2 request
         // - The oauth2 response tries to access an HTTP server and fails, but
@@ -1249,7 +1311,7 @@ class LoginModal extends Modal {
                 .setValue(this.plugin.settings.clientId)
                 .onChange(async (value) => {
                     logInfo('clientId: ' + value);
-                    
+
                     this.plugin.settings.clientId = value || DEFAULT_SETTINGS.clientId;
                     await this.plugin.saveSettings();
 
@@ -1266,7 +1328,7 @@ class LoginModal extends Modal {
                 .setValue(this.plugin.settings.clientSecret)
                 .onChange(async (value) => {
                     logInfo('clientSecret: ' + value);
-                    
+
                     this.plugin.settings.clientSecret = value || DEFAULT_SETTINGS.clientSecret;
                     await this.plugin.saveSettings();
 
@@ -1293,7 +1355,7 @@ class LoginModal extends Modal {
                 .setValue(this.plugin.settings.clientScope)
                 .onChange(async (value) => {
                     logInfo('clientScope: ' + value);
-                    
+
                     this.plugin.settings.clientScope = value || DEFAULT_SETTINGS.clientScope;
                     await this.plugin.saveSettings();
 
@@ -1310,7 +1372,7 @@ class LoginModal extends Modal {
                 .setValue(this.plugin.settings.redirectUri)
                 .onChange(async (value) => {
                     logInfo('clientScope: ' + value);
-                    
+
                     this.plugin.settings.redirectUri = value || DEFAULT_SETTINGS.redirectUri;
                     await this.plugin.saveSettings();
 
@@ -1346,7 +1408,7 @@ class LoginModal extends Modal {
                     } else {
                         // The url has the pattern
                         // http://localhost/?code=...&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file
-                        
+
                         // Exchange for a token
                         // Taken from oauth2 playground
                         const tokenParams = new URLSearchParams({
@@ -1407,12 +1469,12 @@ class LoginModal extends Modal {
 
         const control = contentEl.createDiv("setting-item-control");
         control.style.justifyContent = "flex-start";
-        
+
         // Ok and Cancel buttons are only shown when coming from fetchapi so
         // retries can be aborted, don't show them when coming Obsidian from
         // configuration since as a rule Obsidian configuration dialogs don't
         // have Ok and may be confusing since changes are applied
-        // unconditionally even if Cancel is 
+        // unconditionally even if Cancel is
         //
         // XXX Is this the right thing to do? Think about UX for Ok and Cancel
         if (this.showOkCancel) {
@@ -1453,7 +1515,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
     }
 
     emptyDropdown(dropdown: DropdownComponent) {
-        while (dropdown.selectEl.length > 0) {                
+        while (dropdown.selectEl.length > 0) {
             dropdown.selectEl.remove(0);
         }
     }
@@ -1470,7 +1532,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
         // dropdown until the population is done to prevent the races
         dropdown.setDisabled(true);
         let folders: Record<string, string> = {};
-        
+
         if ((parentId == 'root') && this.plugin.settings.browseOrphans) {
             // XXX The orphans should be in their own subdirectory/sibling of My
             //     Drive so they don't collide with My Drive subfolders?
@@ -1482,7 +1544,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
                     //     calls, fix?
                     // XXX Use [..] and [.] for consistency?
                     dropdown.addOption(".",".");
-                    // XXX This should have some delete folder UI too? 
+                    // XXX This should have some delete folder UI too?
                     dropdown.addOption("<new>", "<new>");
                     dropdown.addOptions(folders);
                     dropdown.setDisabled(false);
@@ -1518,7 +1580,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
             //     sync mode is set to download only it won't need to write)
             // XXX Should this restrict to capabilities.canEdit/canAddChildren/canDelete...?
             //     See https://developers.google.com/drive/api/reference/rest/v3/files#File
-            
+
             // XXX Note with v3 all of (not shared), ownedByMe, (not
             //     sharedWithMe), give errors, but ('me' in owners) works.
             //     See https://stackoverflow.com/questions/28500889/how-to-get-shared-with-me-files-in-google-drive-via-api
@@ -1531,14 +1593,14 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
             // This can return lots of entries so there's a setting to disable
             // that. Another option is to use Total Commander's trick which is
             // forcing the user to add "Computer" anywhere in the name
-            // See 
+            // See
             // https://stackoverflow.com/questions/64719294/google-drive-api-no-way-to-list-entries-under-computers
             // https://stackoverflow.com/questions/14025546/google-drive-api-list-files-with-no-parent
             // https://stackoverflow.com/questions/58136754/how-to-get-a-list-of-drive-files-that-are-orphaned
 
             // XXX Orphan folers also seem to have capabilities.canRename and
             //     not capabilities.canShare but the query q doesn't accept
-            //     those? 
+            //     those?
             if (parentId != null) {
                 q += " and ('" + parentId + "' in parents)";
             }
@@ -1549,7 +1611,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
                 pageToken: pageToken,
                 orderBy: "folder,name",
             };
-        
+
             let resp = await this.plugin.fetchJson('drive/v3/files', params);
             logInfo(resp);
             resp.files.forEach((f: { id: string; name: string; mimeType: string; parents:string[]}) => {
@@ -1618,7 +1680,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
 
         containerEl.createEl('h3', {text: 'Synchronization'});
 
-        
+
         const browseOrphansSetting = new Setting(containerEl)
             .setName("Include orphan root folders")
             .setDesc("Allow browsing Google Drive orphan root folders (eg \"Computers\") in the Google Drive folder dropdown. "+
@@ -1642,8 +1704,8 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
             })
         );
         this.updateBrowseOrphansSetting(browseOrphansSetting);
-        
-        const driveSetting = new Setting(containerEl) 
+
+        const driveSetting = new Setting(containerEl)
             .setName('Google Drive folder')
             .setDesc('Google Drive folder for this vault')
             .addDropdown(dropdown => dropdown
@@ -1656,7 +1718,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
                     } else if (value == "<new>") {
                         // Request a folder name and create it within the
                         // current folderId
-                        
+
                         // XXX If cancelled it needs to move away from <new> to
                         //     ".", for now user can do it manually
                         new TextInputModal(this.app, "Create Google Drive folder", "Enter folder name", async (result) => {
@@ -1665,9 +1727,9 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
                             const resp = await this.plugin.fetchCreateFolder(this.plugin.settings.folderId, result);
                             const folderId = resp.id;
                             this.parentIds.push(this.plugin.settings.folderId);
-                            
+
                             this.plugin.settings.folderId = folderId;
-                            
+
                             // Update the folder dropdown and the displayed full
                             // path
                             this.populateFoldersDropdown(folders, folderId);
@@ -1701,7 +1763,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
 
         let folders = driveSetting.components[0] as DropdownComponent;
         this.parentIds = new Array();
-        
+
         if (this.plugin.settings.parentIds != '') {
             // Initialize parentIds from the json, this is necessary so the
             // combobox can go up in the path when operated
@@ -1709,7 +1771,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
             //     the path ids instead of storing in data.json?
             this.parentIds = JSON.parse(this.plugin.settings.parentIds).ids;
         }
-        
+
         if (this.plugin.settings.accessToken != '') {
             const folderId = this.plugin.settings.folderId;
             this.populateFoldersDropdown(folders, folderId);
@@ -1720,12 +1782,12 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
                 });
             }
         }
-        
+
         if (false) {
             // XXX Missing implementing sync interval, should only Notice but not
             //     popup if login fails?
 
-            new Setting(containerEl) 
+            new Setting(containerEl)
                 .setName('Synchronization interval')
                 .setDesc('Number of seconds between synchronizations to Google Drive. Set to empty to disable.')
                 .addText(text => text
@@ -1759,15 +1821,15 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
         if (false) {
             // XXX Missing implementing compression, could use CompressionStream
             //     (Avail since Chrome v80)
-            
+
             // XXX Compression needs to happen before encryption, but if gzip adds
             //     a deterministic header it should remove the header prior to encryption
             //     or it will weaken the encryption
-            
+
             // XXX This may not need an ok as long as we can detect files that were
             //     compressed
             // XXX Have a compression blacklist?
-            
+
             // XXX This could also offer to compress the whole vault in a single zip
             //     file which could solve issues but then uploading would be slower?
             new Setting(containerEl)
@@ -1830,7 +1892,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         logInfo('password: ' + value);
                         this.plugin.settings.encryptionPassword = value;
-                        
+
                         await this.plugin.saveSettings();
                     })
                     .inputEl.type = "password";
@@ -1850,7 +1912,7 @@ class GoogleDriveSettingsTab extends PluginSettingTab {
                     //     anything?
                     .buttonEl.style.flexGrow = '0';
                 });
-        
+
             // XXX This needs an OK so the files are encrypted/decripted when the
             //     password is changed
             new Setting(containerEl)
