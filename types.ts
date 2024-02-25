@@ -37,7 +37,7 @@ export interface IGoogleDrive extends Plugin {
     syncIntervalSecs: number;
     syncIntervalId: number | null;
 
-	deleteQueue: Array<TAbstractFile>;
+	deleteQueue: Array<string>;
 
 	fetchJson(endpoint: string, params: any, init: RequestInit|null) : Promise<any>;
 	fetchCreateFolder(parentId: string, folderName: string): Promise<any>;

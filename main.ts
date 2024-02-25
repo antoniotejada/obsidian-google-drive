@@ -213,7 +213,8 @@ export default class GoogleDrive extends Plugin implements IGoogleDrive {
     syncIntervalSecs: number = 0;
     syncIntervalId: number | null = null;
 
-	deleteQueue: Array<TAbstractFile> = [];
+	// A queue of paths to be deleted.
+	deleteQueue: Array<string> = [];
 
     async onload() {
         logInfo("onload");
@@ -236,9 +237,14 @@ export default class GoogleDrive extends Plugin implements IGoogleDrive {
 		// Listen for delete operations so we can delete those files on
 		// Google Drive, as well.
 		this.app.vault.on('delete', (abstractFile: TAbstractFile) => {
-			this.deleteQueue.push(abstractFile);
-			logInfo("added to delete queue:");
-			logInfo(abstractFile);
+			this.deleteQueue.push(abstractFile.path);
+			logInfo("added to delete queue: ", abstractFile.path);
+		});
+
+		// We treat renames as a deletion operation, followed by a create operation.
+		this.app.vault.on('rename', (abstractFile: TAbstractFile, oldPath: string) => {
+			// Add the old path to the delete queue.
+			this.deleteQueue.push(oldPath);
 		});
 
         this.addCommand({
@@ -592,17 +598,15 @@ export default class GoogleDrive extends Plugin implements IGoogleDrive {
 
 			// Delete any files remotely that are in the delete queue.
 			while (this.deleteQueue.length > 0) {
-				let nextAbstractFileToDelete = this.deleteQueue.pop();
+				let nextPathToDelete = this.deleteQueue.pop();
 				// let abstractFilePaths = nextAbstractFileToDelete?.path.split("/");
 				// console.log("***** DEBUG_jwir3: abstract file path of deletion target: ", abstractFilePaths);
-				let searchResults: GoogleDriveFileList = await this.findFolderByRelativePath(nextAbstractFileToDelete?.path, this.settings.folderId);
+				let searchResults: GoogleDriveFileList = await this.findFolderByRelativePath(nextPathToDelete, this.settings.folderId);
 				// Retrieve the id from the first result, if it's found
 				if (searchResults.files.length > 0) {
 					let resultingFile = searchResults.files[0];
-					logInfo("***** DEBUG_jwir3: Found resulting file: ", resultingFile);
 					await this.deleteFile(resultingFile.id);
 				}
-				// console.log("***** DEBUG_jwir3: Resulting file: ", folderPath);
 			}
 
             this.syncFolder(this.settings.folderId, this.app.vault.getRoot()).then(async ()=> {

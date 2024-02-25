@@ -73,9 +73,9 @@ The default (non personalized) settings only have access to files and folders cr
 
 ## TODO
 - ~~Support file/folder deletion~~
-- Support file/folder renaming
-- Add support for synchronizing metadata (e.g. `.obsidian` directory)
+- ~~Support file/folder renaming~~
 - Support periodic syncs
+- Add support for synchronizing metadata (e.g. `.obsidian` directory)
 - Support conflict detection
 - Support encryption
 - Support compression
