@@ -7,7 +7,7 @@ There are other ways of synchronizing Obsidian vaults to Google Drive but they r
 **Note there's no deletion/renaming support yet, also there's no conflict detection warning either, ie if you modify a vault from two different devices without synchronizing to Google Drive and then synchronize both to Google Drive, the oldest modification will be overwritten without warning on both the local vaults and Google Drive. See [TODO](#todo)**
 
 ## Features
-- Google OAuth2 secure Google Drive authorization 
+- Google OAuth2 secure Google Drive authorization
 - No third party server access other than Google Drive
 - One hour Google Drive login timeout, if you synchronize your Obsidian vault with Google Drive after the timeout you will be prompted to login again (this is a limitation of not using third party servers, may change in the future)
 - Google Drive folder creation/browsing to synchronize the Obsidian vault to
@@ -32,7 +32,7 @@ There are other ways of synchronizing Obsidian vaults to Google Drive but they r
 1. Configure Google Drive Plugin settings, specifically
     1. Configure Google Drive login
         1. Leave the default settings, click on the _Click to login to Google Drive_ link.
-        1. A browser window using your default browser will open requiring your user and password to access Google Drive on behalf of _Obsidian Google Drive Plugin_ 
+        1. A browser window using your default browser will open requiring your user and password to access Google Drive on behalf of _Obsidian Google Drive Plugin_
         1. After filling in your password and accepting, you will be redirected to an error URL that starts with _localhost:_, copy that whole URL
         1. Go back to Obsidian Google Drive login dialog box and paste that URL into the _Paste error URL_ text box and press Ok
     1. Now that you have configured Google Drive login, create a Google Drive folder for your vault by choosing _\<new>_ in the _Google Drive folder_ dropdown
@@ -58,7 +58,7 @@ The default settings have the following limitations:
 
 ### Personalized Google Drive login settings
 
-If you have your own Google Cloud developer account, you can use your own settings (client id, secret, scope and uri) in the Google Drive login configuration and  
+If you have your own Google Cloud developer account, you can use your own settings (client id, secret, scope and uri) in the Google Drive login configuration and
 - Bypass the one hour limit
 - Access your whole Google Drive if you use a drive scope
 
@@ -72,9 +72,11 @@ The default (non personalized) settings only have access to files and folders cr
 
 
 ## TODO
-- Support file/folder deletion/renaming
-- Support conflict detection
+- ~~Support file/folder deletion~~
+- ~~Support file/folder renaming~~
 - Support periodic syncs
+- Add support for synchronizing metadata (e.g. `.obsidian` directory)
+- Support conflict detection
 - Support encryption
 - Support compression
 - Support for >5MB files
